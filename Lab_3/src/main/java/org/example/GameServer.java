@@ -14,11 +14,12 @@ public class GameServer {
     private static final int WIN_SCORE = 6;
 
     private ServerSocket serverSocket;
-    private List<ClientHandler> clients = new CopyOnWriteArrayList<>();
-    private List<Player> players = new CopyOnWriteArrayList<>();
+
+    private List<ClientHandler> clients = new Vector<>();
+    private List<Player> players = new Vector<>();
+    private List<Arrow> arrows = new Vector<>();
 
     private Target nearTarget, farTarget;
-    private List<Arrow> arrows = new CopyOnWriteArrayList<>();
     private volatile boolean gameRunning = false;
     private volatile boolean paused = false;
     private volatile boolean leaderboardPaused = false;
@@ -90,7 +91,14 @@ public class GameServer {
     }
 
     private void checkAllReady() {
-        if (clients.stream().allMatch(c -> c.ready) && !gameRunning) {
+        boolean allReady = true;
+        for (ClientHandler c : clients) {
+            if (!c.ready) {
+                allReady = false;
+                break;
+            }
+        }
+        if (allReady && !gameRunning) {
             startGame();
         }
     }
@@ -111,7 +119,12 @@ public class GameServer {
         leaderboardRequesters.clear();
         broadcastState("RUNNING", null);
 
-        new Thread(this::gameLoop).start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                gameLoop();
+            }
+        }).start();
     }
 
     private void stopGame(String winnerName) {
@@ -137,13 +150,28 @@ public class GameServer {
     //для старта или снятия паузы (все должны быть готовы).
     private synchronized void handleReady(String username) {
         if (!gameRunning) {
-            clients.stream().filter(c -> c.player != null && c.player.getUsername().equals(username))
-                    .findFirst().ifPresent(c -> c.ready = true);
+            for (ClientHandler c : clients) {
+                if (c.player != null && c.player.getUsername().equals(username)) {
+                    c.ready = true;
+                    break;
+                }
+            }
             checkAllReady();
         } else if (paused) {
-            clients.stream().filter(c -> c.player != null && c.player.getUsername().equals(username))
-                    .findFirst().ifPresent(c -> c.ready = true);
-            if (clients.stream().allMatch(c -> c.ready)) {
+            for (ClientHandler c : clients) {
+                if (c.player != null && c.player.getUsername().equals(username)) {
+                    c.ready = true;
+                    break;
+                }
+            }
+            boolean allReady = true;
+            for (ClientHandler c : clients) {
+                if (!c.ready) {
+                    allReady = false;
+                    break;
+                }
+            }
+            if (allReady) {
                 paused = false;
                 if (!leaderboardPaused) {
                     broadcastState("RUNNING", null);
@@ -159,9 +187,13 @@ public class GameServer {
         }
         leaderboardRequesters.add(username);
 
-        ClientHandler requester = clients.stream()
-                .filter(c -> c.player != null && c.player.getUsername().equals(username))
-                .findFirst().orElse(null);
+        ClientHandler requester = null;
+        for (ClientHandler c : clients) {
+            if (c.player != null && c.player.getUsername().equals(username)) {
+                requester = c;
+                break;
+            }
+        }
         if (requester != null) {
             List<PlayerEntity> leaders = getLeaderboardData();
             requester.sendLeaderboard(leaders);
@@ -180,9 +212,13 @@ public class GameServer {
 
     private void handleShoot(String username) {
         if (!gameRunning || paused || leaderboardPaused) return;
-        ClientHandler shooter = clients.stream()
-                .filter(c -> c.player != null && c.player.getUsername().equals(username))
-                .findFirst().orElse(null);
+        ClientHandler shooter = null;
+        for (ClientHandler c : clients) {
+            if (c.player != null && c.player.getUsername().equals(username)) {
+                shooter = c;
+                break;
+            }
+        }
         if (shooter == null || shooter.player == null) return;
         synchronized (arrows) {
             Player p = shooter.player;
@@ -202,10 +238,14 @@ public class GameServer {
                 if (nearTarget != null) nearTarget.move();
                 if (farTarget != null) farTarget.move();
 
-                for (Arrow a : arrows) {
-                    a.move();
-                    if (checkHit(a) || a.x > 800) {
-                        arrows.remove(a);
+                synchronized (arrows) {
+                    Iterator<Arrow> it = arrows.iterator();
+                    while (it.hasNext()) {
+                        Arrow a = it.next();
+                        a.move();
+                        if (checkHit(a) || a.x > 800) {
+                            it.remove();
+                        }
                     }
                 }
 
@@ -297,7 +337,7 @@ public class GameServer {
         private ObjectInputStream in;
         public Player player;
         public volatile boolean ready = false;
-        public static Map<Integer, Integer> scores = new ConcurrentHashMap<>();
+        public static Map<Integer, Integer> scores = new Hashtable<>();
 
         public ClientHandler(Socket socket) {
             this.socket = socket;
@@ -310,7 +350,7 @@ public class GameServer {
         @Override
         public void run() {
             try {
-                //логина
+                //логин
                 Object loginObj = in.readObject();
                 if (loginObj instanceof LoginMessage) {
                     String username = ((LoginMessage) loginObj).username;
@@ -359,7 +399,7 @@ public class GameServer {
                 out.reset(); // чтобы не кэшировались объекты
                 out.writeObject("STATE");
                 out.writeObject(msg);
-                out.writeObject(new HashMap<>(scores)); // playerId -> score
+                out.writeObject(new HashMap<>(scores)); // playerId - score
             } catch (IOException e) {
                 removePlayer(this);
             }

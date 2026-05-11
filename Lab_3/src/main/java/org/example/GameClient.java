@@ -48,23 +48,31 @@ public class GameClient {
 
     //поток отвечает за прослушивание событий
     public void startListener() {
-        listenerThread = new Thread(() -> {
-            try {
-                while (true) {
-                    Object header = in.readObject();
-                    if ("STATE".equals(header)) {
-                        GameStateMessage state = (GameStateMessage) in.readObject();
-                        Map<Integer, Integer> scores = (Map<Integer, Integer>) in.readObject();
-                        gamePanel.updateState(state, scores);
-                    } else if ("LEADERBOARD".equals(header)) {
-                        List<PlayerEntity> leaders = (List<PlayerEntity>) in.readObject();
-                        if (leaderboardCallback != null) {
-                            SwingUtilities.invokeLater(() -> leaderboardCallback.accept(leaders));
+        listenerThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    while (true) {
+                        Object header = in.readObject();
+                        if ("STATE".equals(header)) {
+                            GameStateMessage state = (GameStateMessage) in.readObject();
+                            Map<Integer, Integer> scores = (Map<Integer, Integer>) in.readObject();
+                            gamePanel.updateState(state, scores);
+                        } else if ("LEADERBOARD".equals(header)) {
+                            List<PlayerEntity> leaders = (List<PlayerEntity>) in.readObject();
+                            if (leaderboardCallback != null) {
+                                SwingUtilities.invokeLater(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        leaderboardCallback.accept(leaders);
+                                    }
+                                });
+                            }
                         }
                     }
+                } catch (IOException | ClassNotFoundException e) {
+                    System.out.println("Disconnected from server.");
                 }
-            } catch (IOException | ClassNotFoundException e) {
-                System.out.println("Disconnected from server.");
             }
         });
         listenerThread.start();
